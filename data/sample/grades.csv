@@ -1,0 +1,5 @@
+metric,score,weighted_score,is_confident,score_3,score_2,scenario_id,scenario_name,category,score_5,score_4
+accuracy,3,2.68,False,0.68,0.32,2,generate_react_app,component_generation,,
+completeness,5,5.0,True,,,2,generate_react_app,component_generation,1.0,
+accuracy,4,3.99,True,0.01,,1,generate_base_component,component_generation,,0.99
+completeness,5,5.0,True,,,1,generate_base_component,component_generation,1.0,

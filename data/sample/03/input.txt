@@ -1,0 +1,5 @@
+Create a function to sum two integers.
+
+1. Use Python
+2. Add docstring
+3. Add type hints

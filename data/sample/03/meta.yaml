@@ -1,0 +1,13 @@
+metadata:
+  scenario_id: 03
+  scenario_name: python_sum_integers
+  category: code_generation
+evaluation_steps:
+  completeness:
+    - Ensure the function takes two integers as input.
+    - Ensure the function returns the sum of the two integers.
+  accuracy:
+    - Verify the function code is written in Python
+    - Verify the function has a docstring
+    - Verify the function has type hints
+    - Ensure the code is elegant

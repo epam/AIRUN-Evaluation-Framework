@@ -1,0 +1,12 @@
+name: auto_llm_eval
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.12
+  - pip=24.0
+  - ipykernel=6.29
+  - numpy=1.26
+  - pandas=2.2
+  - pip:
+      - langchain-openai==0.1.13
