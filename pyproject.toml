@@ -1,2 +1,22 @@
 [tool.black]
 line-length = 79
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "auto-llm-eval"
+version = "0.9.0"
+description = "Auto LLM Evaluation Tool"
+requires-python = ">=3.12"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = ["epam.auto_llm_eval"]
+
+[tool.setuptools.package-data]
+"epam.auto_llm_eval" = ["py.typed"]
+
+[tool.pylint.master]
+init-hook = 'import sys; sys.path.append("src")'

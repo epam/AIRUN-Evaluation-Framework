@@ -7,10 +7,16 @@ from epam.auto_llm_eval.evaluator import EvaluationResult
 from epam.auto_llm_eval.evaluator import evaluate_scenario
 from epam.auto_llm_eval.evaluator import evaluate_metric
 from epam.auto_llm_eval.evaluator import grade_metric
+from epam.auto_llm_eval.evaluation_report import (
+    EvaluationReport,
+    EvaluationStep
+)
 
 __all__ = [
     "EvaluationResult",
     "evaluate_scenario",
     "evaluate_metric",
-    "grade_metric"
+    "grade_metric",
+    "EvaluationReport",
+    "EvaluationStep"
 ]
