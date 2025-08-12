@@ -16,7 +16,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 EVALUATION_PROMPT = '''
-    Evaluate the newer according to the evaluation steps.
+    Your task is to evaluate the answer according to the evaluation steps.
+    Evaluate only that the answer meets the evaluation steps, do not make
+    any assumptions about the task/experiment conditions or the missing
+    context/images (trust that everything was provided to the task executor).
 
     Output must be a valid Markdown document containing evaluation report.
 
@@ -284,7 +287,7 @@ class EvaluationResult:
         merged_dict: dict[str, any] = {
             **result_dict,
             **prob_dict,
-            **self.metadata
+            **self.metadata,
         }
 
         return merged_dict
@@ -345,9 +348,7 @@ def write_file(file_path: str, content: str) -> None:
 
 
 def evaluate_metric(
-    evaluation_steps: List[str],
-    answer: str,
-    model: Runnable
+    evaluation_steps: List[str], answer: str, model: Runnable
 ) -> str:
     """
     Evaluate the answer based on the provided evaluation steps.
@@ -386,10 +387,7 @@ def evaluate_metric(
     return report
 
 
-def grade_metric(
-    evaluation_report: str,
-    model: Runnable
-) -> EvaluationResult:
+def grade_metric(evaluation_report: str, model: Runnable) -> EvaluationResult:
     """
     Grade the answer based on the evaluation report.
 
@@ -449,7 +447,7 @@ def evaluate_scenario(
     base_path: str,
     scenario_id: str,
     evaluation_model: AzureChatOpenAI,
-    grading_model: AzureChatOpenAI
+    grading_model: AzureChatOpenAI,
 ) -> Tuple[EvaluationResult, EvaluationResult]:
     """
     Evaluate a single scenario from a dataset.
@@ -466,9 +464,7 @@ def evaluate_scenario(
         Tuple[EvaluationResult, EvaluationResult]: A tuple containing the
         accuracy and completeness evaluation results.
     """
-    output: str = get_scenario_file(
-        base_path, scenario_id, "output.md"
-    )
+    output: str = get_scenario_file(base_path, scenario_id, "output.md")
     metadata_content: str = get_scenario_file(
         base_path, scenario_id, "meta.yaml"
     )
@@ -481,9 +477,7 @@ def evaluate_scenario(
     completeness_evaluation_steps: List[str] = evaluation_steps.get(
         "completeness", []
     )
-    accuracy_evaluation_steps: List[str] = evaluation_steps.get(
-        "accuracy", []
-    )
+    accuracy_evaluation_steps: List[str] = evaluation_steps.get("accuracy", [])
 
     print(f"Evaluating scenario {scenario_id}_{meta.get('scenario_name')}")
 
@@ -501,13 +495,13 @@ def evaluate_scenario(
             "Scenario directory not found: %s/%s. "
             "Skipping completeness report.",
             base_path,
-            scenario_id
+            scenario_id,
         )
     except OSError as e:
         logger.error(
             "Failed to write completeness report for scenario %s: %s",
             scenario_id,
-            e
+            e,
         )
 
     accuracy_report: str = evaluate_metric(
@@ -524,20 +518,18 @@ def evaluate_scenario(
             "Scenario directory not found: %s/%s. "
             "Skipping accuracy report.",
             base_path,
-            scenario_id
+            scenario_id,
         )
     except OSError as e:
         logger.error(
             "Failed to write accuracy report for scenario %s: %s",
             scenario_id,
-            e
+            e,
         )
 
     model_with_logprobs: AzureChatOpenAI = grading_model.bind(
         logprobs=True
-    ).bind(
-        top_logprobs=5
-    )
+    ).bind(top_logprobs=5)
 
     print(f"Grading scenario {scenario_id}_{meta.get('scenario_name')}")
     accuracy: EvaluationResult = grade_metric(
