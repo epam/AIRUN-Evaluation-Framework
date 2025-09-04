@@ -1,42 +1,36 @@
 """This module provides functionality for evaluating and grading LLM answers"""
 
-from typing import Dict, List, Tuple
+import json
 import os
 import logging
-from traitlets import Any
 import yaml
+import textwrap
+from pathlib import Path
+from typing import Callable, List, Tuple
 
-from langchain_core.messages import HumanMessage
-from langchain_core.runnables import Runnable
-from langchain_openai import AzureChatOpenAI
-
-
-import numpy as np
 
 logger = logging.getLogger(__name__)
 
-EVALUATION_PROMPT = '''
+EVALUATION_PROMPT = textwrap.dedent(
+    '''
     Your task is to evaluate the answer according to the evaluation steps.
     Evaluate only that the answer meets the evaluation steps, do not make
     any assumptions about the task/experiment conditions or the missing
     context/images (trust that everything was provided to the task executor).
 
-    Output must be a valid Markdown document containing evaluation report.
+    Output must be a valid JSON document containing evaluation report.
+    Return only JSON starting with {{ and ending with }}.
+    Do not add any comments to JSON document.
 
-    Evaluation report consists of steps which are prefixed with either Pass or
-    Fail. Pass means the step passed successfully, Fail means the step is
-    Failed. Include your confidence level in the step evaluation as a
-    percentage (0-100%) in brackets after each evaluation. 100% means you are
-    very confident the step has passed or failed, while 0% means you are not
-    confident at all in the result.
+    Evaluation report contains list of evaluated steps.
+    Each step contains the following fields: criteria, weight, passed, confidence, explanation.
+    - criteria: The evaluation criteria text as provided in the input.
+    - weight: The weight of the criteria as provided in the input.
+    - passed: true if the answer meets the criteria, false otherwise.
+    - confidence: Your confidence level in the evaluation result as a percentage (0-100%).
+    - explanation: Explanation of the evaluation result, especially if confidence is less than 100%.
 
-    If you are confident less than 100% in the step evaluation result, please
-    explain why.
-
-    Include in the end of the report total number of steps evaluated, number of
-    passed steps and number of failed steps.
-
-    Here's an example of an answer and its evaluation:
+    Here's an example of an answer and its evaluation response:
 
     ANSWER:
 
@@ -56,48 +50,26 @@ EVALUATION_PROMPT = '''
 
     EVALUATION STEPS:
 
-    - Verify the function code is written in Python
-    - Verify the function has a docstring
+    - criteria: Verify the function code is written in Python
+      weight: 1.0
+    - criteria: Verify the function has a docstring
+      weight: 0.5
     - Verify the function has type hints
+      weight: 0.5
     - Ensure the code is elegant
+      weight: 0.25
 
     EVALUATION REPORT:
+    {{
+      "evaluation_steps": [
+        {{"criteria": "Verify the function code is written in Python", "weight": 1.0, "passed": true, "confidence": 100, "explanation": "The function is clearly written in Python syntax."}},
+        {{"criteria": "Verify the function has a docstring", "weight": 0.5, "passed": true, "confidence": 100, "explanation": "The function includes a docstring that describes its purpose, arguments, and return value."}},
+        {{"criteria": "Verify the function has type hints", "weight": 0.5, "passed": false, "confidence": 100, "explanation": "The function does not include type hints for its parameters or return type."}},
+        {{"criteria": "Ensure the code is elegant", "weight": 0.25, "passed": true, "confidence": 90, "explanation": "The code is simple and straightforward, but could be improved with type hints."}}
+      ]
+    }}
 
-    # Evaluation Report
-
-    - **Pass** (100%): Verify the function code is written in Python
-    - **Pass** (100%): Verify the function has a docstring
-    - **Fail** (100%): Verify the function has type hints
-
-        The function `sum_integers` in the provided code does not include type
-        hints. We can conclude this by observing the function definition:
-
-        def sum_integers(a, b):
-
-        In Python, type hints are typically added after the parameter names and
-        before the colon, followed by the return type hint after the -> symbol.
-        The correct format with type hints would look like this:
-
-        def sum_integers(a: int, b: int) -> int:
-
-        The absence of : int after the parameters a and b, and the missing ->
-        int before the colon at the end of the function definition, clearly
-        indicates that type hints are not present in the given function.
-
-    - **Pass** (90%): Ensure the code is elegant
-
-        The provided function is simple and straightforward, adhering to
-        Python's clean and readable syntax. However, incorporating type hints
-        could enhance clarity and maintainability, making the code more
-        explicit about the expected input and output types.
-
-    ---
-
-    Total steps evaluated: 4
-    Number of passed steps: 3
-    Number of failed steps: 1
-
-    Now, evaluate the following:
+    Now, evaluate the following and provide the evaluation report in the specified JSON format:
 
     ANSWER:
 
@@ -106,60 +78,127 @@ EVALUATION_PROMPT = '''
     EVALUATION STEPS:
 
     {steps}
-
-    EVALUATION REPORT:
-'''
-
-GRADING_PROMPT = """
-    Grade the answer based on the provided evaluation report.
-
-    Grade scale is from 1 to 5 with 1 being the lowest score and 5 being the
-    highest.
-
-    Consider the following when grading:
-    1. Number of passed vs. failed steps
-    2. Severity of failed steps
-
-    Severity levels and examples:
-    - Low severity:
-      * Minor formatting issues
-      * Non-critical TODO comments left in the code
-      * Slight deviations in variable naming conventions
-
-    - Medium severity:
-      * Missing or incorrect error handling
-      * Inefficient algorithms that don't significantly impact performance
-      * Incomplete or unclear documentation
-
-    - High severity:
-      * Incorrect logic that produces wrong results
-      * Security vulnerabilities
-      * Failure to implement core functionality
-      * Major compatibility issues with specified frameworks/libraries
-
-    Scoring Guide:
-    5: All steps passed or only low severity failures
-    4: Mostly passed with 1-2 low or one medium severity failures
-    3: Several failures, mix of low and medium severity
-    2: Multiple failures including 1-2 high severity issues
-    1: Majority of steps failed or 3+ critical high severity issues
-
-    EVALUATION REPORT:
-
-    {report}
-
-    Output only one number from 1 to 5 representing the grade.
-    """
+    '''
+)
 
 
-class EvaluationResult:
-    """
-    Represents the evaluation result of a metric.
+class EvalStep:
+    criteria: str
+    weight: float
 
-    This class stores and processes probabilities for different scores,
-    calculates various score representations, and manages metadata
-    associated with the evaluation.
-    """
+    def __init__(self, criteria: str, weight: float):
+        self.criteria = criteria
+        self.weight = weight
+
+
+class EvalStepProcessed(EvalStep):
+    passed: bool
+    explanation: str
+
+    def __init__(
+        self, criteria: str, weight: float, passed: bool, explanation: str
+    ):
+        super().__init__(criteria, weight)
+        self.passed = passed
+        self.explanation = explanation
+
+
+class EvalSteps:
+    accuracy: List[EvalStep]
+    completeness: List[EvalStep]
+
+    def __init__(self, accuracy: List[EvalStep], completeness: List[EvalStep]):
+        self.accuracy = accuracy
+        self.completeness = completeness
+
+
+class CriteriaMeta:
+    category: str
+    experiment: str
+    repoitory: str
+    scenario_id: int
+
+    def __init__(
+        self, category: str, experiment: str, repository: str, scenario_id: int
+    ):
+        self.category = category
+        self.experiment = experiment
+        self.repository = repository
+        self.scenario_id = scenario_id
+
+
+class Criteria:
+    evaluation_steps: EvalSteps
+    metadata: CriteriaMeta
+
+    def __init__(self, evaluation_steps: EvalSteps, metadata: CriteriaMeta):
+        self.evaluation_steps = evaluation_steps
+        self.metadata = metadata
+
+    @staticmethod
+    def from_yaml(yaml_content: str) -> "Criteria":
+        data = yaml.safe_load(yaml_content)
+
+        if "evaluation_steps" not in data or "metadata" not in data:
+            raise ValueError(
+                "YAML must contain 'evaluation_steps' and 'metadata' sections."
+            )
+
+        eval_steps = data["evaluation_steps"]
+        accuracy_steps = []
+        completeness_steps = []
+
+        if "accuracy" not in eval_steps or "completeness" not in eval_steps:
+            raise ValueError(
+                "YAML 'evaluation_steps' must contain 'accuracy' and 'completeness'."
+            )
+
+        for item in eval_steps["accuracy"]:
+            if "criteria" not in item or "weight" not in item:
+                raise ValueError(
+                    "Each accuracy step must have 'criteria' and 'weight'."
+                )
+
+            accuracy_steps.append(
+                EvalStep(
+                    criteria=item["criteria"], weight=float(item["weight"])
+                )
+            )
+
+        for item in eval_steps["completeness"]:
+            if "criteria" not in item or "weight" not in item:
+                raise ValueError(
+                    "Each completeness step must have 'criteria' and 'weight'."
+                )
+
+            completeness_steps.append(
+                EvalStep(
+                    criteria=item["criteria"], weight=float(item["weight"])
+                )
+            )
+
+        steps = EvalSteps(
+            accuracy=accuracy_steps, completeness=completeness_steps
+        )
+
+        meta = data["metadata"]
+        required_meta = ["category", "experiment"]
+        for key in required_meta:
+            if key not in meta:
+                raise ValueError(f"Metadata missing required field: {key}")
+
+        metadata = CriteriaMeta(
+            category=meta["category"],
+            experiment=meta["experiment"],
+            repository=meta.get("repository", ""),
+            scenario_id=int(meta.get("scenario_id", -1)),
+        )
+
+        return Criteria(evaluation_steps=steps, metadata=metadata)
+
+
+class GradingResult:
+    evaluation_steps: List[EvalStepProcessed]
 
     def __init__(self):
         """
@@ -168,132 +207,39 @@ class EvaluationResult:
         Initializes an empty list for probabilities and an empty dictionary
         for metadata.
         """
-        self.probabilities: List[Tuple[int, float]] = []
-        self.metadata: Dict[str, Any] = {}
+        self.evaluation_steps = []
 
-    def set_probabilities(self, top_logprobs: List[dict]) -> None:
+    def add_eval_step(self, eval_step: EvalStepProcessed) -> None:
         """
-        Set probabilities from the LLM response metadata.
-
-        Processes the log probabilities from the LLM response, converting them
-        to probabilities for scores 1-5. Ignores tokens that are not in this
-        range or have very low probabilities.
+        Add a criteria evaluation result to the grading result.
 
         Args:
-            top_logprobs (List[dict]): A list of dictionaries containing token
-                and logprob information.
+            criteria (CriteriaEval): The criteria evaluation result to add.
         """
-        for logprob in top_logprobs:
-            token: str = logprob["token"]
-            try:
-                token_int: int = int(token)
-                if token_int not in [1, 2, 3, 4, 5]:
-                    raise ValueError("Token is not in the range 1-5")
-            except ValueError:
-                break
+        self.evaluation_steps.append(eval_step)
 
-            logprob_value: float = logprob["logprob"]
-            probability: float = np.round(np.exp(logprob_value), 2)
-            if probability < 0.01:  # Ignore tokens with low probability
-                break
-            self.probabilities.append((token_int, probability))
-
-    def get_probabilities(self) -> List[Tuple[int, float]]:
+    def get_score(self) -> float:
         """
-        Return the probabilities of the scores.
+        Calculate and return the overall score based on criteria evaluations.
+
+        The score is calculated as the weighted sum of passed criteria divided
+        by the total weight of all criteria.
 
         Returns:
-            List[Tuple[int, float]]: A list of tuples containing score and its
-            probability.
+            float: The overall score as a float between 0 and 1.
         """
-        return self.probabilities
+        total_weight = sum(c.weight for c in self.evaluation_steps)
+        if total_weight == 0:
+            return 0.0
+        passed_weight = sum(
+            c.weight for c in self.evaluation_steps if c.passed
+        )
+        score = passed_weight / total_weight
 
-    def get_score(self) -> int:
-        """
-        Return the score with the maximum probability.
-
-        Returns:
-            int: The score (1-5) with the highest probability.
-        """
-        (score, _) = max(self.probabilities, key=lambda x: x[1])
         return score
 
-    def get_weighted_score(self) -> float:
-        """
-        Return the weighted score based on the probabilities.
 
-        Calculates a weighted average of scores, where each score is weighted
-        by its probability.
-
-        Returns:
-            float: The weighted score, rounded to two decimal places.
-        """
-        weighted_score: float = sum(
-            [score * prob for (score, prob) in self.probabilities]
-        )
-        weighted_score = np.round(weighted_score, 2)
-        return weighted_score
-
-    def is_confident(self, threshold: float = 0.9) -> bool:
-        """
-        Determine if the model is confident about the score.
-
-        Args:
-            threshold (float, optional): The probability threshold for
-            confidence. Defaults to 0.9.
-
-        Returns:
-            bool: True if the highest probability exceeds the threshold,
-            False otherwise.
-        """
-        (_, max_prob) = max(self.probabilities, key=lambda x: x[1])
-        return max_prob > threshold
-
-    def set_metadata(self, metadata: dict[str, any]) -> None:
-        """
-        Set metadata for the evaluation result.
-
-        Args:
-            metadata (dict[str, any]): A dictionary containing additional
-            information about the evaluation.
-        """
-        self.metadata = metadata
-
-    def to_data_frame(self, metric_name: str) -> dict[str, any]:
-        """
-        Store the evaluation result as a dataframe row.
-
-        Converts the evaluation result into a dictionary format suitable for
-        creating a dataframe row.
-
-        Args:
-            metric_name (str): The name of the metric being evaluated.
-
-        Returns:
-            dict[str, any]: A dictionary containing evaluation results and
-                metadata.
-        """
-        result_dict: dict[str, any] = {
-            "metric": metric_name,
-            "score": self.get_score(),
-            "weighted_score": self.get_weighted_score(),
-            "is_confident": self.is_confident(),
-        }
-
-        prob_dict: dict[str, float] = {
-            f"score_{grade}": prob for grade, prob in self.probabilities
-        }
-
-        merged_dict: dict[str, any] = {
-            **result_dict,
-            **prob_dict,
-            **self.metadata,
-        }
-
-        return merged_dict
-
-
-def read_file(file_path: str) -> str:
+def read_file(file_path: str | Path) -> str:
     """
     Read the content of a file and return it as a string.
 
@@ -316,7 +262,7 @@ def read_file(file_path: str) -> str:
     return content
 
 
-def write_file(file_path: str, content: str) -> None:
+def write_file(file_path: str | Path, content: str) -> None:
     """
     Write the content to a file.
 
@@ -347,199 +293,132 @@ def write_file(file_path: str, content: str) -> None:
         f.write(content)
 
 
-def evaluate_metric(
-    evaluation_steps: List[str], answer: str, model: Runnable
+def evaluate_output(
+    evaluation_steps: List[EvalStep],
+    output: str,
+    execute_prompt: Callable[[str], str],
 ) -> str:
     """
     Evaluate the answer based on the provided evaluation steps.
 
     This function generates an evaluation report for a given answer using
-    specified evaluation steps and an AI model.
+    specified evaluation steps and a callable evaluation function.
 
     Args:
-        evaluation_steps (List[str]): A list of steps to be used in evaluating
-        the answer.
-        answer (str): The answer to be evaluated.
-        model (Runnable): The AI model used for generating the
-        evaluation.
+      evaluation_steps (List[EvalStep]): A list of steps to be used in evaluating
+      the output.
+      output (str): The output to be evaluated.
+      execute_prompt (callable): A function that accepts a string prompt and returns a string report.
 
     Returns:
-        str: The evaluation report generated by the AI model.
+      str: The evaluation report generated by the evaluation function.
 
     Raises:
-        ValueError: If the evaluation_steps list is empty.
-        TypeError: If the model is not an instance of Runnable.
+      ValueError: If the evaluation_steps list is empty.
+      TypeError: If evaluate is not callable.
     """
     if not evaluation_steps:
         raise ValueError("Evaluation steps cannot be empty.")
-    if not isinstance(model, Runnable):
-        raise TypeError("Model must be an instance of Runnable.")
+    if not callable(execute_prompt):
+        raise TypeError(
+            "evaluate must be a callable accepting a string and returning a string."
+        )
 
-    prompt: str = EVALUATION_PROMPT.format(
-        answer=answer, steps="\n".join(evaluation_steps)
-    )
-
-    message: HumanMessage = HumanMessage(content=prompt)
-
-    api_response = model.invoke([message])
-    report: str = api_response.content
+    criteria_str = ""
+    for item in evaluation_steps:
+        criteria_str += (
+            f"- criteria: {item.criteria}\n  weight: {item.weight}\n"
+        )
+    prompt: str = EVALUATION_PROMPT.format(answer=output, steps=criteria_str)
+    report: str = execute_prompt(prompt)
 
     return report
 
 
-def grade_metric(evaluation_report: str, model: Runnable) -> EvaluationResult:
+def grade_report(evaluation_report: str) -> GradingResult:
     """
     Grade the answer based on the evaluation report.
 
-    This function uses an AI model to grade the evaluation report and return
-    an EvaluationResult object containing the grading probabilities.
-
     Args:
         evaluation_report (str): The evaluation report to be graded.
-        model (Runnable): The AI model used for grading.
 
     Returns:
-        EvaluationResult: An object containing the grading probabilities.
+        GradingResult: An object containing the grading result.
 
     Raises:
-        TypeError: If the model is not an instance of Runnable.
+        TypeError: If the evaluation report is in wrong format.
     """
-    if not isinstance(model, Runnable):
-        raise TypeError("Model must be an instance of Runnable.")
 
-    prompt: str = GRADING_PROMPT.format(report=evaluation_report)
-    message: HumanMessage = HumanMessage(content=prompt)
-
-    api_response: Any = model.invoke([message])
-    top_five_logprobs: Dict[str, float] = (
-        api_response.response_metadata.get("logprobs", {})
-        .get("content", [{}])[0]
-        .get("top_logprobs", {})
-    )
-    result: EvaluationResult = EvaluationResult()
-    result.set_probabilities(top_five_logprobs)
+    result = GradingResult()
+    try:
+        report_json = json.loads(evaluation_report)
+        evaluation_steps = report_json.get("evaluation_steps")
+        for item in evaluation_steps:
+            criteria = item.get("criteria")
+            weight = float(item.get("weight"))
+            passed = bool(item.get("passed"))
+            explanation = item.get("explanation")
+            eval_step_obj = EvalStepProcessed(
+                criteria=criteria,
+                weight=weight,
+                passed=passed,
+                explanation=explanation,
+            )
+            result.add_eval_step(eval_step_obj)
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as e:
+        raise TypeError(f"Invalid evaluation report: {e}")
 
     return result
 
 
-def get_scenario_file(base_path: str, scenario_id: str, filename: str) -> str:
-    """
-    Get the content of a scenario file with validation.
-
-    Args:
-        base_path (str): The base path to the scenario files.
-        scenario_id (str): The ID of the scenario.
-        filename (str): Name of the file to read.
-
-    Returns:
-        str: Content of the file.
-
-    Raises:
-        FileNotFoundError: If the file or directory doesn't exist.
-    """
-    file_path = os.path.abspath(os.path.join(base_path, scenario_id, filename))
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found: {file_path}")
-    return read_file(file_path)
-
-
 def evaluate_scenario(
-    base_path: str,
-    scenario_id: str,
-    evaluation_model: AzureChatOpenAI,
-    grading_model: AzureChatOpenAI,
-) -> Tuple[EvaluationResult, EvaluationResult]:
+    criteria_yaml: str,
+    output: str,
+    execute_prompt: Callable[[str], str],
+) -> Tuple[str, str]:  # [accuracy, completeness]
     """
-    Evaluate a single scenario from a dataset.
-
-    This function reads the scenario data, evaluates completeness and accuracy,
-    and grades the evaluation reports.
+    Evaluate a single scenario.
+    This function accepts the scenario data and evaluates completeness and accuracy.
 
     Args:
-        base_path (str): The base path to the scenario files.
-        scenario_id (str): The ID of the scenario to evaluate.
-        model (AzureChatOpenAI): The AI model used for evaluation and grading.
+        criteria_yaml (str): Evaluation criteria.
+        output (str): Scenario output.
+        execute_prompt (Callable[[str], str]): The function to execute the evaluation prompt.
 
     Returns:
         Tuple[EvaluationResult, EvaluationResult]: A tuple containing the
         accuracy and completeness evaluation results.
     """
-    output: str = get_scenario_file(base_path, scenario_id, "output.md")
-    metadata_content: str = get_scenario_file(
-        base_path, scenario_id, "meta.yaml"
-    )
-    metadata: Dict[str, Any] = yaml.safe_load(metadata_content)
-    meta: Dict[str, Any] = metadata.get("metadata", {})
-    evaluation_steps: Dict[str, List[str]] = metadata.get(
-        "evaluation_steps", {}
+    evaluation_criteria: Criteria = Criteria.from_yaml(criteria_yaml)
+    completeness_report = evaluate_output(
+        evaluation_criteria.evaluation_steps.completeness,
+        output,
+        execute_prompt,
     )
 
-    completeness_evaluation_steps: List[str] = evaluation_steps.get(
-        "completeness", []
-    )
-    accuracy_evaluation_steps: List[str] = evaluation_steps.get("accuracy", [])
-
-    print(f"Evaluating scenario {scenario_id}_{meta.get('scenario_name')}")
-
-    completeness_report: str = evaluate_metric(
-        completeness_evaluation_steps, output, evaluation_model
+    accuracy_report = evaluate_output(
+        evaluation_criteria.evaluation_steps.accuracy, output, execute_prompt
     )
 
-    try:
-        write_file(
-            os.path.join(base_path, scenario_id, "completeness.md"),
-            completeness_report,
-        )
-    except FileNotFoundError:
-        logger.error(
-            "Scenario directory not found: %s/%s. "
-            "Skipping completeness report.",
-            base_path,
-            scenario_id,
-        )
-    except OSError as e:
-        logger.error(
-            "Failed to write completeness report for scenario %s: %s",
-            scenario_id,
-            e,
-        )
+    return (accuracy_report, completeness_report)
 
-    accuracy_report: str = evaluate_metric(
-        accuracy_evaluation_steps, output, evaluation_model
-    )
 
-    try:
-        write_file(
-            os.path.join(base_path, scenario_id, "accuracy.md"),
-            accuracy_report,
-        )
-    except FileNotFoundError:
-        logger.error(
-            "Scenario directory not found: %s/%s. "
-            "Skipping accuracy report.",
-            base_path,
-            scenario_id,
-        )
-    except OSError as e:
-        logger.error(
-            "Failed to write accuracy report for scenario %s: %s",
-            scenario_id,
-            e,
-        )
+def grade_scenario(
+    accuracy_report: str, completeness_report: str
+) -> Tuple[GradingResult, GradingResult]:
+    """
+    Grade accuracy and completeness reports.
 
-    model_with_logprobs: AzureChatOpenAI = grading_model.bind(
-        logprobs=True
-    ).bind(top_logprobs=5)
+    Args:
+        accuracy_report (str): The accuracy report to be graded.
+        completeness_report (str): The completeness report to be graded.
 
-    print(f"Grading scenario {scenario_id}_{meta.get('scenario_name')}")
-    accuracy: EvaluationResult = grade_metric(
-        accuracy_report, model_with_logprobs
-    )
-    accuracy.set_metadata(meta)
+    Returns:
+        Tuple[GradingResult, GradingResult]: A tuple containing the
+        accuracy and completeness grading results.
+    """
 
-    completeness: EvaluationResult = grade_metric(
-        completeness_report, model_with_logprobs
-    )
-    completeness.set_metadata(meta)
+    accuracy: GradingResult = grade_report(accuracy_report)
+    completeness: GradingResult = grade_report(completeness_report)
 
     return (accuracy, completeness)

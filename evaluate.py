@@ -3,12 +3,19 @@
 import os
 import argparse
 import logging
-
+import re
 import pandas as pd
+from pathlib import Path
 
+from langchain_core.messages import HumanMessage
 from langchain_openai import AzureChatOpenAI, ChatOpenAI
 
-from epam.auto_llm_eval import evaluate_scenario
+from epam.auto_llm_eval import (
+    evaluate_scenario,
+    grade_scenario,
+    read_file,
+    write_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +44,7 @@ def get_gpt4_model():
     return model
 
 
-def get_o1_mini_model():
+def get_o3_mini_model():
     """Get the o1-mini model for generating evaluation reports."""
     # Read API key from the environment variables
     openai_api_key = os.environ["OPENAI_API_KEY"]
@@ -46,7 +53,7 @@ def get_o1_mini_model():
 
     # Define o1-mini model
     model = ChatOpenAI(
-        model_name="o1-mini",
+        model_name="o3-mini",
         temperature=1,
         api_key=openai_api_key,
     )
@@ -115,14 +122,12 @@ def validate_report_path(path: str) -> str:
 
 
 def is_valid_scenario(
-    filename: str,
-    data_dir: str,
-    scenarios: list[int]
+    scenario_dir: str, data_dir: str, scenarios: list[int]
 ) -> bool:
-    """Check if the given filename represents a valid scenario to evaluate.
+    """Check if the given scenario_dir represents a valid scenario to evaluate.
 
     Args:
-        filename: Name of the directory to check
+        scenario_dir: Name of the directory to check
         data_dir: Base directory path
         scenarios: List of scenario numbers to evaluate
 
@@ -130,27 +135,27 @@ def is_valid_scenario(
         bool: True if the directory is a valid scenario to evaluate
     """
     # Check if it's a directory
-    scenario_dir = os.path.join(data_dir, filename)
+    scenario_dir = os.path.join(data_dir, scenario_dir)
     if not os.path.isdir(scenario_dir):
         return False
 
     # Check if scenario name is a number
-    if not filename.isdigit():
+    if not scenario_dir.isdigit():
         return False
 
     # Check if scenario number is in the requested range
-    if int(filename) not in scenarios:
+    if int(scenario_dir) not in scenarios:
         return False
 
     # Check required files present in the scenario directory
-    required_files = ['input.txt', 'meta.yaml', 'output.md']
+    required_files = ["input.txt", "meta.yaml", "output.md"]
     for required_file in required_files:
         file_path = os.path.join(scenario_dir, required_file)
         if not os.path.isfile(file_path):
             logger.warning(
                 "Scenario %s is missing required file: %s",
-                filename,
-                required_file
+                scenario_dir,
+                required_file,
             )
             return False
 
@@ -216,25 +221,64 @@ def main():
         logger.error("Error: %s", e)
         return 1
 
-    gpt_4_omni = get_gpt4_model()
-    o1_mini = get_o1_mini_model()
+    eval_model = get_o3_mini_model()
 
     grading_report = []
+    for scenario_dir in os.listdir(data_dir):
+        scenario_id = int(scenario_dir)
+        if is_valid_scenario(scenario_dir, data_dir, scenarios):
+            criteria_yaml = read_file(
+                Path(data_dir) / scenario_dir / "meta.yaml"
+            )
+            output = read_file(Path(data_dir) / scenario_dir / "output.md")
 
-    for filename in os.listdir(data_dir):
-        if is_valid_scenario(filename, data_dir, scenarios):
-            scenario_id = filename
-            (accuracy, completeness) = evaluate_scenario(
-                base_path=data_dir,
-                scenario_id=scenario_id,
-                evaluation_model=o1_mini,
-                grading_model=gpt_4_omni
+            def extract_json_from_md(content: str) -> str:
+                if content.startswith("```json"):
+                    # Extract JSON content from markdown code block
+                    match = re.search(r"```json(.*?)```", content, re.DOTALL)
+                    if match:
+                        return match.group(1).strip()
+                    else:
+                        return content
+
+                return content
+
+            def execute_prompt(prompt: str) -> str:
+                message: HumanMessage = HumanMessage(content=prompt)
+                api_response = eval_model.invoke([message])
+                report: str = str(api_response.content)
+
+                return extract_json_from_md(report)
+
+            (accuracy_report, completeness_report) = evaluate_scenario(
+                criteria_yaml=criteria_yaml,
+                output=output,
+                execute_prompt=execute_prompt,
             )
 
-            grading_report.append(accuracy.to_data_frame("accuracy"))
-            grading_report.append(completeness.to_data_frame("completeness"))
+            write_file(
+                os.path.join(data_dir, scenario_dir, "accuracy.md"),
+                accuracy_report,
+            )
+            write_file(
+                os.path.join(data_dir, scenario_dir, "completeness.md"),
+                completeness_report,
+            )
 
-            scenarios.remove(int(scenario_id))
+            (accuracy_grade, completeness_grade) = grade_scenario(
+                accuracy_report=accuracy_report,
+                completeness_report=completeness_report,
+            )
+
+            grading_report.append(
+                {
+                    "scenario_id": scenario_id,
+                    "accuracy_score": accuracy_grade.get_score(),
+                    "completeness_score": completeness_grade.get_score(),
+                }
+            )
+
+            scenarios.remove(scenario_id)
 
     save_grading_report(report_path, grading_report)
 

@@ -1,31 +1,56 @@
 metadata:
   scenario_id: 01
-  scenario_name: generate_base_component
   category: component_generation
+  experiment: code_generation
+  repository: repository
 evaluation_steps:
   completeness:
-    - Confirm the component includes a search feature in the dropdown.
-    - Check that the component is navigable via keyboard.
-    - Verify items in the dropdown can be selected by pressing the Enter key.
-    - Confirm the dropdown list opens when Enter is pressed.
-    - Ensure the focus returns to the select component after the dropdown is closed.
-    - Verify the dropdown closes upon selecting an item via keyboard.
-    - Verify the dropdown closes upon selecting an item via mouse.
-    - Confirm the dropdown closes when the Escape key is pressed.
-    - Ensure the dropdown closes when clicking outside the component.
+    - criteria: Confirm the component includes a search feature in the dropdown.
+      weight: 1.0
+    - criteria: Check that the component is navigable via keyboard.
+      weight: 1.0
+    - criteria: Verify items in the dropdown can be selected by pressing the Enter key.
+      weight: 1.0
+    - criteria: Confirm the dropdown list opens when Enter is pressed.
+      weight: 1.0
+    - criteria: Ensure the focus returns to the select component after the dropdown is closed.
+      weight: 1.0
+    - criteria: Verify the dropdown closes upon selecting an item via keyboard.
+      weight: 1.0
+    - criteria: Verify the dropdown closes upon selecting an item via mouse.
+      weight: 1.0
+    - criteria: Confirm the dropdown closes when the Escape key is pressed.
+      weight: 1.0
+    - criteria: Ensure the dropdown closes when clicking outside the component.
+      weight: 1.0
   accuracy:
-    - Ensure the application does not contain unused imports or code.
-    - Ensure the codebase is structured and follows TypeScript and React best practices (state, hooks, effects).
-    - Ensure the application is free of memory leaks and unnecessary re-renders.
-    - Ensure the application is compatible with the latest version of React and TypeScript.
-    - Ensure the application is free of console errors and warnings.
-    - Ensure app does not access DOM elements to retrieve the values of text fields.
-    - Ensure app does not directly manipulate the DOM outside of React’s virtual DOM.
-    - Ensure app does not overuse refs for DOM access instead of React’s state and props.
-    - Ensure app does not have too many re-renders due to state or prop changes.
-    - Ensure the code adheres to accessibility standards (e.g., ARIA roles).
-    - Ensure the component is written in TypeScript.
-    - Verify the component is created using React 18.x.
-    - Verify the presence of an index.css file.
-    - Check that the generated code does not contain any TODOs.
-    - App does correctly use useEffect, avoiding infinite loops.
+    - criteria: Ensure the application does not contain unused imports or code.
+      weight: 1.0
+    - criteria: Ensure the codebase is structured and follows TypeScript and React best practices (state, hooks, effects).
+      weight: 1.0
+    - criteria: Ensure the application is free of memory leaks and unnecessary re-renders.
+      weight: 1.0
+    - criteria: Ensure the application is compatible with the latest version of React and TypeScript.
+      weight: 1.0
+    - criteria: Ensure the application is free of console errors and warnings.
+      weight: 1.0
+    - criteria: Ensure app does not access DOM elements to retrieve the values of text fields.
+      weight: 1.0
+    - criteria: Ensure app does not directly manipulate the DOM outside of React’s virtual DOM.
+      weight: 1.0
+    - criteria: Ensure app does not overuse refs for DOM access instead of React’s state and props.
+      weight: 1.0
+    - criteria: Ensure app does not have too many re-renders due to state or prop changes.
+      weight: 1.0
+    - criteria: Ensure the code adheres to accessibility standards (e.g., ARIA roles).
+      weight: 1.0
+    - criteria: Ensure the component is written in TypeScript.
+      weight: 1.0
+    - criteria: Verify the component is created using React 18.x.
+      weight: 1.0
+    - criteria: Verify the presence of an index.css file.
+      weight: 1.0
+    - criteria: Check that the generated code does not contain any TODOs.
+      weight: 1.0
+    - criteria: App does correctly use useEffect, avoiding infinite loops.
+      weight: 1.0
