@@ -1,13 +1,20 @@
 metadata:
   scenario_id: 03
-  scenario_name: python_sum_integers
+  experiment: python_sum_integers
   category: code_generation
+  repository: repository
 evaluation_steps:
   completeness:
-    - Ensure the function takes two integers as input.
-    - Ensure the function returns the sum of the two integers.
+    - criteria: Ensure the function takes two integers as input.
+      weight: 1.0
+    - criteria: Ensure the function returns the sum of the two integers.
+      weight: 1.0
   accuracy:
-    - Verify the function code is written in Python
-    - Verify the function has a docstring
-    - Verify the function has type hints
-    - Ensure the code is elegant
+    - criteria: Verify the function code is written in Python
+      weight: 1.0
+    - criteria: Verify the function has a docstring
+      weight: 1.0
+    - criteria: Verify the function has type hints
+      weight: 1.0
+    - criteria: Ensure the code is elegant
+      weight: 1.0
