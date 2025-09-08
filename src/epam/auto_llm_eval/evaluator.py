@@ -372,7 +372,7 @@ def grade_report(evaluation_report: str) -> GradingResult:
 
 
 def evaluate_scenario(
-    criteria_yaml: str,
+    criteria: Criteria,
     output: str,
     execute_prompt: Callable[[str], str],
 ) -> Tuple[str, str]:  # [accuracy, completeness]
@@ -381,7 +381,7 @@ def evaluate_scenario(
     This function accepts the scenario data and evaluates completeness and accuracy.
 
     Args:
-        criteria_yaml (str): Evaluation criteria.
+        criteria (Criteria): Evaluation criteria.
         output (str): Scenario output.
         execute_prompt (Callable[[str], str]): The function to execute the evaluation prompt.
 
@@ -389,15 +389,14 @@ def evaluate_scenario(
         Tuple[EvaluationResult, EvaluationResult]: A tuple containing the
         accuracy and completeness evaluation results.
     """
-    evaluation_criteria: Criteria = Criteria.from_yaml(criteria_yaml)
     completeness_report = evaluate_output(
-        evaluation_criteria.evaluation_steps.completeness,
+        criteria.evaluation_steps.completeness,
         output,
         execute_prompt,
     )
 
     accuracy_report = evaluate_output(
-        evaluation_criteria.evaluation_steps.accuracy, output, execute_prompt
+        criteria.evaluation_steps.accuracy, output, execute_prompt
     )
 
     return (accuracy_report, completeness_report)

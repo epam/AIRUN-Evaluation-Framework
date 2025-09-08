@@ -15,6 +15,7 @@ from epam.auto_llm_eval import (
     grade_scenario,
     read_file,
     write_file,
+    Criteria,
 )
 
 logger = logging.getLogger(__name__)
@@ -135,8 +136,8 @@ def is_valid_scenario(
         bool: True if the directory is a valid scenario to evaluate
     """
     # Check if it's a directory
-    scenario_dir = os.path.join(data_dir, scenario_dir)
-    if not os.path.isdir(scenario_dir):
+    scenario_dir_full_path = os.path.join(data_dir, scenario_dir)
+    if not os.path.isdir(scenario_dir_full_path):
         return False
 
     # Check if scenario name is a number
@@ -150,7 +151,7 @@ def is_valid_scenario(
     # Check required files present in the scenario directory
     required_files = ["input.txt", "meta.yaml", "output.md"]
     for required_file in required_files:
-        file_path = os.path.join(scenario_dir, required_file)
+        file_path = os.path.join(scenario_dir_full_path, required_file)
         if not os.path.isfile(file_path):
             logger.warning(
                 "Scenario %s is missing required file: %s",
@@ -230,18 +231,16 @@ def main():
             criteria_yaml = read_file(
                 Path(data_dir) / scenario_dir / "meta.yaml"
             )
+            criteria = Criteria.from_yaml(criteria_yaml)
             output = read_file(Path(data_dir) / scenario_dir / "output.md")
 
             def extract_json_from_md(content: str) -> str:
-                if content.startswith("```json"):
-                    # Extract JSON content from markdown code block
-                    match = re.search(r"```json(.*?)```", content, re.DOTALL)
-                    if match:
-                        return match.group(1).strip()
-                    else:
-                        return content
+                json_text = content
+                json_text = json_text.strip("\n")
+                json_text = json_text.strip("`")
+                json_text = json_text.replace("json\n", "", 1)
 
-                return content
+                return json_text
 
             def execute_prompt(prompt: str) -> str:
                 message: HumanMessage = HumanMessage(content=prompt)
@@ -251,7 +250,7 @@ def main():
                 return extract_json_from_md(report)
 
             (accuracy_report, completeness_report) = evaluate_scenario(
-                criteria_yaml=criteria_yaml,
+                criteria=criteria,
                 output=output,
                 execute_prompt=execute_prompt,
             )
