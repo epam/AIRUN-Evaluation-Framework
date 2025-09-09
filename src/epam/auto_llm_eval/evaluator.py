@@ -82,7 +82,7 @@ EVALUATION_PROMPT = textwrap.dedent(
 )
 
 
-class EvalStep:
+class CriteriaEvalStep:
     criteria: str
     weight: float
 
@@ -91,7 +91,7 @@ class EvalStep:
         self.weight = weight
 
 
-class EvalStepProcessed(EvalStep):
+class CriteriaEvalStepProcessed(CriteriaEvalStep):
     passed: bool
     explanation: str
 
@@ -103,11 +103,15 @@ class EvalStepProcessed(EvalStep):
         self.explanation = explanation
 
 
-class EvalSteps:
-    accuracy: List[EvalStep]
-    completeness: List[EvalStep]
+class CriteriaEvalSteps:
+    accuracy: List[CriteriaEvalStep]
+    completeness: List[CriteriaEvalStep]
 
-    def __init__(self, accuracy: List[EvalStep], completeness: List[EvalStep]):
+    def __init__(
+        self,
+        accuracy: List[CriteriaEvalStep],
+        completeness: List[CriteriaEvalStep],
+    ):
         self.accuracy = accuracy
         self.completeness = completeness
 
@@ -128,10 +132,12 @@ class CriteriaMeta:
 
 
 class Criteria:
-    evaluation_steps: EvalSteps
+    evaluation_steps: CriteriaEvalSteps
     metadata: CriteriaMeta
 
-    def __init__(self, evaluation_steps: EvalSteps, metadata: CriteriaMeta):
+    def __init__(
+        self, evaluation_steps: CriteriaEvalSteps, metadata: CriteriaMeta
+    ):
         self.evaluation_steps = evaluation_steps
         self.metadata = metadata
 
@@ -160,7 +166,7 @@ class Criteria:
                 )
 
             accuracy_steps.append(
-                EvalStep(
+                CriteriaEvalStep(
                     criteria=item["criteria"], weight=float(item["weight"])
                 )
             )
@@ -172,12 +178,12 @@ class Criteria:
                 )
 
             completeness_steps.append(
-                EvalStep(
+                CriteriaEvalStep(
                     criteria=item["criteria"], weight=float(item["weight"])
                 )
             )
 
-        steps = EvalSteps(
+        steps = CriteriaEvalSteps(
             accuracy=accuracy_steps, completeness=completeness_steps
         )
 
@@ -198,7 +204,7 @@ class Criteria:
 
 
 class GradingResult:
-    evaluation_steps: List[EvalStepProcessed]
+    evaluation_steps: List[CriteriaEvalStepProcessed]
 
     def __init__(self):
         """
@@ -209,7 +215,7 @@ class GradingResult:
         """
         self.evaluation_steps = []
 
-    def add_eval_step(self, eval_step: EvalStepProcessed) -> None:
+    def add_eval_step(self, eval_step: CriteriaEvalStepProcessed) -> None:
         """
         Add a criteria evaluation result to the grading result.
 
@@ -294,7 +300,7 @@ def write_file(file_path: str | Path, content: str) -> None:
 
 
 def evaluate_output(
-    evaluation_steps: List[EvalStep],
+    evaluation_steps: List[CriteriaEvalStep],
     output: str,
     execute_prompt: Callable[[str], str],
 ) -> str:
@@ -358,7 +364,7 @@ def grade_report(evaluation_report: str) -> GradingResult:
             weight = float(item.get("weight"))
             passed = bool(item.get("passed"))
             explanation = item.get("explanation")
-            eval_step_obj = EvalStepProcessed(
+            eval_step_obj = CriteriaEvalStepProcessed(
                 criteria=criteria,
                 weight=weight,
                 passed=passed,
