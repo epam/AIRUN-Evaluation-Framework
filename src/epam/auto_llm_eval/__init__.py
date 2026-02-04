@@ -7,9 +7,9 @@ from epam.auto_llm_eval.evaluator import GradingResult
 from epam.auto_llm_eval.evaluator import (
     Criteria,
     CriteriaMeta,
-    CriteriaEvalStep,
-    CriteriaEvalSteps,
-    CriteriaEvalStepProcessed,
+    CriterionEvalStep,
+    CriterionEvalSteps,
+    CriterionEvalStepProcessed,
 )
 from epam.auto_llm_eval.evaluator import evaluate_output
 from epam.auto_llm_eval.evaluator import evaluate_scenario
@@ -21,9 +21,9 @@ __all__ = [
     "GradingResult",
     "Criteria",
     "CriteriaMeta",
-    "CriteriaEvalStep",
-    "CriteriaEvalSteps",
-    "CriteriaEvalStepProcessed",
+    "CriterionEvalStep",
+    "CriterionEvalSteps",
+    "CriterionEvalStepProcessed",
     "evaluate_scenario",
     "evaluate_output",
     "grade_scenario",
