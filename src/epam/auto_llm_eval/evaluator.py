@@ -6,7 +6,7 @@ import logging
 import yaml
 import textwrap
 from pathlib import Path
-from typing import Callable, List, Tuple
+from typing import Callable, List, Self, Tuple
 
 
 logger = logging.getLogger(__name__)
@@ -23,10 +23,10 @@ EVALUATION_PROMPT = textwrap.dedent(
     Do not add any comments to JSON document.
 
     Evaluation report contains list of evaluated steps.
-    Each step contains the following fields: criteria, weight, passed, confidence, explanation.
-    - criteria: The evaluation criteria text as provided in the input.
-    - weight: The weight of the criteria as provided in the input.
-    - passed: true if the answer meets the criteria, false otherwise.
+    Each step contains the following fields: criterion, weight, passed, confidence, explanation.
+    - criterion: The evaluation criterion text as provided in the input.
+    - weight: The weight of the criterion as provided in the input.
+    - passed: true if the answer meets the criterion, false otherwise.
     - confidence: Your confidence level in the evaluation result as a percentage (0-100%).
     - explanation: Explanation of the evaluation result, especially if confidence is less than 100%.
 
@@ -50,9 +50,9 @@ EVALUATION_PROMPT = textwrap.dedent(
 
     EVALUATION STEPS:
 
-    - criteria: Verify the function code is written in Python
+    - criterion: Verify the function code is written in Python
       weight: 1.0
-    - criteria: Verify the function has a docstring
+    - criterion: Verify the function has a docstring
       weight: 0.5
     - Verify the function has type hints
       weight: 0.5
@@ -62,10 +62,10 @@ EVALUATION_PROMPT = textwrap.dedent(
     EVALUATION REPORT:
     {{
       "evaluation_steps": [
-        {{"criteria": "Verify the function code is written in Python", "weight": 1.0, "passed": true, "confidence": 100, "explanation": "The function is clearly written in Python syntax."}},
-        {{"criteria": "Verify the function has a docstring", "weight": 0.5, "passed": true, "confidence": 100, "explanation": "The function includes a docstring that describes its purpose, arguments, and return value."}},
-        {{"criteria": "Verify the function has type hints", "weight": 0.5, "passed": false, "confidence": 100, "explanation": "The function does not include type hints for its parameters or return type."}},
-        {{"criteria": "Ensure the code is elegant", "weight": 0.25, "passed": true, "confidence": 90, "explanation": "The code is simple and straightforward, but could be improved with type hints."}}
+        {{"criterion": "Verify the function code is written in Python", "weight": 1.0, "passed": true, "confidence": 100, "explanation": "The function is clearly written in Python syntax."}},
+        {{"criterion": "Verify the function has a docstring", "weight": 0.5, "passed": true, "confidence": 100, "explanation": "The function includes a docstring that describes its purpose, arguments, and return value."}},
+        {{"criterion": "Verify the function has type hints", "weight": 0.5, "passed": false, "confidence": 100, "explanation": "The function does not include type hints for its parameters or return type."}},
+        {{"criterion": "Ensure the code is elegant", "weight": 0.25, "passed": true, "confidence": 90, "explanation": "The code is simple and straightforward, but could be improved with type hints."}}
       ]
     }}
 
@@ -82,35 +82,35 @@ EVALUATION_PROMPT = textwrap.dedent(
 )
 
 
-class CriteriaEvalStep:
-    criteria: str
+class CriterionEvalStep:
+    criterion: str
     weight: float
 
-    def __init__(self, criteria: str, weight: float):
-        self.criteria = criteria
+    def __init__(self, criterion: str, weight: float):
+        self.criterion = criterion
         self.weight = weight
 
 
-class CriteriaEvalStepProcessed(CriteriaEvalStep):
+class CriterionEvalStepProcessed(CriterionEvalStep):
     passed: bool
     explanation: str
 
     def __init__(
-        self, criteria: str, weight: float, passed: bool, explanation: str
+        self, criterion: str, weight: float, passed: bool, explanation: str
     ):
-        super().__init__(criteria, weight)
+        super().__init__(criterion, weight)
         self.passed = passed
         self.explanation = explanation
 
 
-class CriteriaEvalSteps:
-    accuracy: List[CriteriaEvalStep]
-    completeness: List[CriteriaEvalStep]
+class CriterionEvalSteps:
+    accuracy: List[CriterionEvalStep]
+    completeness: List[CriterionEvalStep]
 
     def __init__(
         self,
-        accuracy: List[CriteriaEvalStep],
-        completeness: List[CriteriaEvalStep],
+        accuracy: List[CriterionEvalStep],
+        completeness: List[CriterionEvalStep],
     ):
         self.accuracy = accuracy
         self.completeness = completeness
@@ -119,7 +119,7 @@ class CriteriaEvalSteps:
 class CriteriaMeta:
     category: str
     experiment: str
-    repoitory: str
+    repository: str
     scenario_id: int
 
     def __init__(
@@ -132,17 +132,17 @@ class CriteriaMeta:
 
 
 class Criteria:
-    evaluation_steps: CriteriaEvalSteps
+    evaluation_steps: CriterionEvalSteps
     metadata: CriteriaMeta
 
     def __init__(
-        self, evaluation_steps: CriteriaEvalSteps, metadata: CriteriaMeta
+        self, evaluation_steps: CriterionEvalSteps, metadata: CriteriaMeta
     ):
         self.evaluation_steps = evaluation_steps
         self.metadata = metadata
 
     @staticmethod
-    def from_yaml(yaml_content: str) -> "Criteria":
+    def from_yaml(yaml_content: str) -> Self:
         data = yaml.safe_load(yaml_content)
 
         if "evaluation_steps" not in data or "metadata" not in data:
@@ -160,42 +160,42 @@ class Criteria:
             )
 
         for item in eval_steps["accuracy"]:
-            if "criteria" not in item or "weight" not in item:
+            if "criterion" not in item or "weight" not in item:
                 raise ValueError(
-                    "Each accuracy step must have 'criteria' and 'weight'."
+                    "Each accuracy step must have 'criterion' and 'weight'."
                 )
 
             accuracy_steps.append(
-                CriteriaEvalStep(
-                    criteria=item["criteria"], weight=float(item["weight"])
+                CriterionEvalStep(
+                    criterion=item["criterion"], weight=float(item["weight"])
                 )
             )
 
         for item in eval_steps["completeness"]:
-            if "criteria" not in item or "weight" not in item:
+            if "criterion" not in item or "weight" not in item:
                 raise ValueError(
-                    "Each completeness step must have 'criteria' and 'weight'."
+                    "Each completeness step must have 'criterion' and 'weight'."
                 )
 
             completeness_steps.append(
-                CriteriaEvalStep(
-                    criteria=item["criteria"], weight=float(item["weight"])
+                CriterionEvalStep(
+                    criterion=item["criterion"], weight=float(item["weight"])
                 )
             )
 
-        steps = CriteriaEvalSteps(
+        steps = CriterionEvalSteps(
             accuracy=accuracy_steps, completeness=completeness_steps
         )
 
         meta = data["metadata"]
-        required_meta = ["category", "experiment"]
+        required_meta = ["category"]
         for key in required_meta:
             if key not in meta:
                 raise ValueError(f"Metadata missing required field: {key}")
 
         metadata = CriteriaMeta(
             category=meta["category"],
-            experiment=meta["experiment"],
+            experiment=meta.get("experiment", ""),
             repository=meta.get("repository", ""),
             scenario_id=int(meta.get("scenario_id", -1)),
         )
@@ -204,7 +204,7 @@ class Criteria:
 
 
 class GradingResult:
-    evaluation_steps: List[CriteriaEvalStepProcessed]
+    evaluation_steps: List[CriterionEvalStepProcessed]
 
     def __init__(self):
         """
@@ -215,21 +215,21 @@ class GradingResult:
         """
         self.evaluation_steps = []
 
-    def add_eval_step(self, eval_step: CriteriaEvalStepProcessed) -> None:
+    def add_eval_step(self, eval_step: CriterionEvalStepProcessed) -> None:
         """
-        Add a criteria evaluation result to the grading result.
+        Add a criterion evaluation result to the grading result.
 
         Args:
-            criteria (CriteriaEval): The criteria evaluation result to add.
+            criterion (CriterionEval): The criterion evaluation result to add.
         """
         self.evaluation_steps.append(eval_step)
 
     def get_score(self) -> float:
         """
-        Calculate and return the overall score based on criteria evaluations.
+        Calculate and return the overall score based on criterion evaluations.
 
-        The score is calculated as the weighted sum of passed criteria divided
-        by the total weight of all criteria.
+        The score is calculated as the weighted sum of passed criterion divided
+        by the total weight of all criterion.
 
         Returns:
             float: The overall score as a float between 0 and 1.
@@ -300,7 +300,7 @@ def write_file(file_path: str | Path, content: str) -> None:
 
 
 def evaluate_output(
-    evaluation_steps: List[CriteriaEvalStep],
+    evaluation_steps: List[CriterionEvalStep],
     output: str,
     execute_prompt: Callable[[str], str],
 ) -> str:
@@ -330,12 +330,12 @@ def evaluate_output(
             "evaluate must be a callable accepting a string and returning a string."
         )
 
-    criteria_str = ""
+    criterion_str = ""
     for item in evaluation_steps:
-        criteria_str += (
-            f"- criteria: {item.criteria}\n  weight: {item.weight}\n"
+        criterion_str += (
+            f"- criterion: {item.criterion}\n  weight: {item.weight}\n"
         )
-    prompt: str = EVALUATION_PROMPT.format(answer=output, steps=criteria_str)
+    prompt: str = EVALUATION_PROMPT.format(answer=output, steps=criterion_str)
     report: str = execute_prompt(prompt)
 
     return report
@@ -360,12 +360,12 @@ def grade_report(evaluation_report: str) -> GradingResult:
         report_json = json.loads(evaluation_report)
         evaluation_steps = report_json.get("evaluation_steps")
         for item in evaluation_steps:
-            criteria = item.get("criteria")
+            criterion = item.get("criterion")
             weight = float(item.get("weight"))
             passed = bool(item.get("passed"))
             explanation = item.get("explanation")
-            eval_step_obj = CriteriaEvalStepProcessed(
-                criteria=criteria,
+            eval_step_obj = CriterionEvalStepProcessed(
+                criterion=criterion,
                 weight=weight,
                 passed=passed,
                 explanation=explanation,
