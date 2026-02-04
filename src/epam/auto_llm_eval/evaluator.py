@@ -1,12 +1,16 @@
 """This module provides functionality for evaluating and grading LLM answers"""
 
 import json
-import os
 import logging
-import yaml
+import re
 import textwrap
+import os
+import yaml
+
+
+from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Callable, List, Self, Tuple
+from typing import Callable, Generator,Self
 
 
 logger = logging.getLogger(__name__)
@@ -26,6 +30,7 @@ EVALUATION_PROMPT = textwrap.dedent(
     Each step contains the following fields: criterion, weight, passed, confidence, explanation.
     - criterion: The evaluation criterion text as provided in the input.
     - weight: The weight of the criterion as provided in the input.
+    - type: the criterion type.
     - passed: true if the answer meets the criterion, false otherwise.
     - confidence: Your confidence level in the evaluation result as a percentage (0-100%).
     - explanation: Explanation of the evaluation result, especially if confidence is less than 100%.
@@ -52,20 +57,24 @@ EVALUATION_PROMPT = textwrap.dedent(
 
     - criterion: Verify the function code is written in Python
       weight: 1.0
+      type: completeness
     - criterion: Verify the function has a docstring
       weight: 0.5
+      type: completeness
     - Verify the function has type hints
       weight: 0.5
+      type: completeness
     - Ensure the code is elegant
       weight: 0.25
+      type: accuracy
 
     EVALUATION REPORT:
     {{
       "evaluation_steps": [
-        {{"criterion": "Verify the function code is written in Python", "weight": 1.0, "passed": true, "confidence": 100, "explanation": "The function is clearly written in Python syntax."}},
-        {{"criterion": "Verify the function has a docstring", "weight": 0.5, "passed": true, "confidence": 100, "explanation": "The function includes a docstring that describes its purpose, arguments, and return value."}},
-        {{"criterion": "Verify the function has type hints", "weight": 0.5, "passed": false, "confidence": 100, "explanation": "The function does not include type hints for its parameters or return type."}},
-        {{"criterion": "Ensure the code is elegant", "weight": 0.25, "passed": true, "confidence": 90, "explanation": "The code is simple and straightforward, but could be improved with type hints."}}
+        {{"criterion": "Verify the function code is written in Python", "weight": 1.0, "type": "completeness", "passed": true, "confidence": 100, "explanation": "The function is clearly written in Python syntax."}},
+        {{"criterion": "Verify the function has a docstring", "weight": 0.5, "type": "completeness", "passed": true, "confidence": 100, "explanation": "The function includes a docstring that describes its purpose, arguments, and return value."}},
+        {{"criterion": "Verify the function has type hints", "weight": 0.5, "type": "completeness", "passed": false, "confidence": 100, "explanation": "The function does not include type hints for its parameters or return type."}},
+        {{"criterion": "Ensure the code is elegant", "weight": 0.25, "type": "accuracy", "passed": true, "confidence": 90, "explanation": "The code is simple and straightforward, but could be improved with type hints."}}
       ]
     }}
 
@@ -82,38 +91,36 @@ EVALUATION_PROMPT = textwrap.dedent(
 )
 
 
+VALID_RESULT_IDETIFIER_PATTERN = re.compile('^\\w+$')
+
+def assert_valid_result_identifier(id_: str) -> None:
+    if not VALID_RESULT_IDETIFIER_PATTERN.match(id_):
+        raise ValueError(f"'{id_}' is not a valid result identifier. It should only contains alphanumeric letters (a-z) and (0-9), or underscores (_).")
+
+
 class CriterionEvalStep:
     criterion: str
     weight: float
+    type: str
 
-    def __init__(self, criterion: str, weight: float):
+    def __init__(self, criterion: str, weight: float, type: str):
         self.criterion = criterion
         self.weight = weight
+        self.type = type
 
 
 class CriterionEvalStepProcessed(CriterionEvalStep):
     passed: bool
+    confidence: float
     explanation: str
 
     def __init__(
-        self, criterion: str, weight: float, passed: bool, explanation: str
+        self, criterion: str, weight: float, type: str, passed: bool, confidence: float, explanation: str
     ):
-        super().__init__(criterion, weight)
+        super().__init__(criterion, weight, type)
         self.passed = passed
+        self.confidence = confidence
         self.explanation = explanation
-
-
-class CriterionEvalSteps:
-    accuracy: List[CriterionEvalStep]
-    completeness: List[CriterionEvalStep]
-
-    def __init__(
-        self,
-        accuracy: List[CriterionEvalStep],
-        completeness: List[CriterionEvalStep],
-    ):
-        self.accuracy = accuracy
-        self.completeness = completeness
 
 
 class CriteriaMeta:
@@ -131,18 +138,49 @@ class CriteriaMeta:
         self.scenario_id = scenario_id
 
 
-class Criteria:
-    evaluation_steps: CriterionEvalSteps
-    metadata: CriteriaMeta
+class EvaluationStepsBucket:
+    name: str
+    evaluation_steps: tuple[CriterionEvalStep, ...]
+
+    def __init__(self, name: str, evaluation_steps: tuple[CriterionEvalStep, ...]):
+        self.name = name
+        self.evaluation_steps = evaluation_steps
+
+
+class CriteriaBase(ABC):
+    __metadata: CriteriaMeta
+    __criterion_eval_steps: tuple[CriterionEvalStep, ...]
 
     def __init__(
-        self, evaluation_steps: CriterionEvalSteps, metadata: CriteriaMeta
+        self, metadata: CriteriaMeta, criterion_eval_steps: tuple[CriterionEvalStep, ...]
     ):
-        self.evaluation_steps = evaluation_steps
-        self.metadata = metadata
+        self.__metadata = metadata
+        self.__criterion_eval_steps = criterion_eval_steps
 
-    @staticmethod
-    def from_yaml(yaml_content: str) -> Self:
+    @property
+    def metadata(self):
+        return self.__metadata
+
+    @property
+    def criterion_eval_steps(self):
+        return self.__criterion_eval_steps
+
+
+    @abstractmethod
+    def evaluation_steps_buckets(self) -> Generator[EvaluationStepsBucket, None, None]:
+        """Return iterator of EvaluationStepsBucket to evaluate."""
+        pass
+
+
+class Criteria(CriteriaBase):
+
+    def __init__(
+        self, metadata: CriteriaMeta, criterion_eval_steps: tuple[CriterionEvalStep, ...]
+    ):
+        super().__init__(metadata, criterion_eval_steps)
+
+    @classmethod
+    def from_yaml(cls, yaml_content: str) -> Self:
         data = yaml.safe_load(yaml_content)
 
         if "evaluation_steps" not in data or "metadata" not in data:
@@ -150,42 +188,21 @@ class Criteria:
                 "YAML must contain 'evaluation_steps' and 'metadata' sections."
             )
 
-        eval_steps = data["evaluation_steps"]
-        accuracy_steps = []
-        completeness_steps = []
+        data_eval_steps = data["evaluation_steps"]
+        criterion_eval_steps = []
 
-        if "accuracy" not in eval_steps or "completeness" not in eval_steps:
-            raise ValueError(
-                "YAML 'evaluation_steps' must contain 'accuracy' and 'completeness'."
-            )
+        for type_ in data_eval_steps:
+            for item in data_eval_steps[type_]:
+                if "criterion" not in item or "weight" not in item:
+                    raise ValueError(
+                        "Each step must have 'criterion' and 'weight'."
+                    )
 
-        for item in eval_steps["accuracy"]:
-            if "criterion" not in item or "weight" not in item:
-                raise ValueError(
-                    "Each accuracy step must have 'criterion' and 'weight'."
+                criterion_eval_steps.append(
+                    CriterionEvalStep(
+                        criterion=item["criterion"], weight=float(item["weight"]), type=type_
+                    )
                 )
-
-            accuracy_steps.append(
-                CriterionEvalStep(
-                    criterion=item["criterion"], weight=float(item["weight"])
-                )
-            )
-
-        for item in eval_steps["completeness"]:
-            if "criterion" not in item or "weight" not in item:
-                raise ValueError(
-                    "Each completeness step must have 'criterion' and 'weight'."
-                )
-
-            completeness_steps.append(
-                CriterionEvalStep(
-                    criterion=item["criterion"], weight=float(item["weight"])
-                )
-            )
-
-        steps = CriterionEvalSteps(
-            accuracy=accuracy_steps, completeness=completeness_steps
-        )
 
         meta = data["metadata"]
         required_meta = ["category"]
@@ -200,29 +217,88 @@ class Criteria:
             scenario_id=int(meta.get("scenario_id", -1)),
         )
 
-        return Criteria(evaluation_steps=steps, metadata=metadata)
+        return cls(metadata=metadata, criterion_eval_steps=tuple(criterion_eval_steps))
+
+    def evaluation_steps_buckets(self) -> Generator[EvaluationStepsBucket, None, None]:
+        distinct_types = {step.type for step in self.criterion_eval_steps}
+        for type_ in distinct_types:
+            typed_evaluation_steps = tuple(step for step in self.criterion_eval_steps if step.type == type_)
+            yield EvaluationStepsBucket(name=type_, evaluation_steps=typed_evaluation_steps)
 
 
-class GradingResult:
-    evaluation_steps: List[CriterionEvalStepProcessed]
+class EvaluationResult:
+    __name: str
+    __report: str
 
-    def __init__(self):
+    def __init__(self, name: str, report: str):
+        assert_valid_result_identifier(name)
+        self.__name = name
+        self.__report = report
+
+    @property
+    def name(self):
+        return self.__name
+
+    @property
+    def report(self):
+        return self.__report
+
+
+class GradeResult:
+    __name: str
+    __evaluation_steps: tuple[CriterionEvalStepProcessed]
+
+    def __init__(self, name: str, evaluation_steps: tuple[CriterionEvalStepProcessed]):
+        assert_valid_result_identifier(name)
+        self.__name = name
+        self.__evaluation_steps = evaluation_steps
+
+    @property
+    def name(self):
+        return self.__name
+
+    @property
+    def evaluation_steps(self):
+        return self.__evaluation_steps
+
+    @classmethod
+    def from_evaluation_result(cls, evaluation_result: EvaluationResult) -> Self:
         """
-        Initialize an EvaluationResult instance.
-
-        Initializes an empty list for probabilities and an empty dictionary
-        for metadata.
-        """
-        self.evaluation_steps = []
-
-    def add_eval_step(self, eval_step: CriterionEvalStepProcessed) -> None:
-        """
-        Add a criterion evaluation result to the grading result.
+        Construct grade result object from the evaluation report.
 
         Args:
-            criterion (CriterionEval): The criterion evaluation result to add.
+            evaluation_result (str): The evaluation result to be graded.
+
+        Returns:
+            GradeResult: An object containing the grading result.
+
+        Raises:
+            TypeError: If the evaluation report is in wrong format.
         """
-        self.evaluation_steps.append(eval_step)
+
+        try:
+            result_evaluation_steps = []
+            report_json = json.loads(evaluation_result.report)
+            evaluation_steps = report_json.get("evaluation_steps")
+            for item in evaluation_steps:
+                criterion = item.get("criterion")
+                weight = float(item.get("weight"))
+                type_ = item.get("type")
+                passed = bool(item.get("passed"))
+                confidence = float(item.get("confidence"))
+                explanation = item.get("explanation")
+                eval_step_obj = CriterionEvalStepProcessed(
+                    criterion=criterion,
+                    weight=weight,
+                    type=type_,
+                    passed=passed,
+                    confidence=confidence,
+                    explanation=explanation,
+                )
+                result_evaluation_steps.append(eval_step_obj)
+            return cls(evaluation_result.name, tuple(result_evaluation_steps))
+        except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as e:
+            raise TypeError(f"Invalid evaluation report: {e}")
 
     def get_score(self) -> float:
         """
@@ -234,11 +310,11 @@ class GradingResult:
         Returns:
             float: The overall score as a float between 0 and 1.
         """
-        total_weight = sum(c.weight for c in self.evaluation_steps)
+        total_weight = sum(c.weight for c in self.__evaluation_steps)
         if total_weight == 0:
             return 0.0
         passed_weight = sum(
-            c.weight for c in self.evaluation_steps if c.passed
+            c.weight for c in self.__evaluation_steps if c.passed
         )
         score = passed_weight / total_weight
 
@@ -300,7 +376,7 @@ def write_file(file_path: str | Path, content: str) -> None:
 
 
 def evaluate_output(
-    evaluation_steps: List[CriterionEvalStep],
+    evaluation_steps: tuple[CriterionEvalStep, ...],
     output: str,
     execute_prompt: Callable[[str], str],
 ) -> str:
@@ -311,7 +387,7 @@ def evaluate_output(
     specified evaluation steps and a callable evaluation function.
 
     Args:
-      evaluation_steps (List[EvalStep]): A list of steps to be used in evaluating
+      evaluation_steps (tuple[CriterionEvalStep, ...]): A tuple of steps to be used in evaluating
       the output.
       output (str): The output to be evaluated.
       execute_prompt (callable): A function that accepts a string prompt and returns a string report.
@@ -333,7 +409,7 @@ def evaluate_output(
     criterion_str = ""
     for item in evaluation_steps:
         criterion_str += (
-            f"- criterion: {item.criterion}\n  weight: {item.weight}\n"
+            f"- criterion: {item.criterion}\n  weight: {item.weight}\n  type: {item.type}\n"
         )
     prompt: str = EVALUATION_PROMPT.format(answer=output, steps=criterion_str)
     report: str = execute_prompt(prompt)
@@ -341,50 +417,14 @@ def evaluate_output(
     return report
 
 
-def grade_report(evaluation_report: str) -> GradingResult:
-    """
-    Grade the answer based on the evaluation report.
-
-    Args:
-        evaluation_report (str): The evaluation report to be graded.
-
-    Returns:
-        GradingResult: An object containing the grading result.
-
-    Raises:
-        TypeError: If the evaluation report is in wrong format.
-    """
-
-    result = GradingResult()
-    try:
-        report_json = json.loads(evaluation_report)
-        evaluation_steps = report_json.get("evaluation_steps")
-        for item in evaluation_steps:
-            criterion = item.get("criterion")
-            weight = float(item.get("weight"))
-            passed = bool(item.get("passed"))
-            explanation = item.get("explanation")
-            eval_step_obj = CriterionEvalStepProcessed(
-                criterion=criterion,
-                weight=weight,
-                passed=passed,
-                explanation=explanation,
-            )
-            result.add_eval_step(eval_step_obj)
-    except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as e:
-        raise TypeError(f"Invalid evaluation report: {e}")
-
-    return result
-
-
 def evaluate_scenario(
     criteria: Criteria,
     output: str,
     execute_prompt: Callable[[str], str],
-) -> Tuple[str, str]:  # [accuracy, completeness]
+) -> tuple[EvaluationResult, ...]:
     """
     Evaluate a single scenario.
-    This function accepts the scenario data and evaluates completeness and accuracy.
+    This function accepts the scenario data and evaluates it against specified criteria of various types, typically completeness and accuracy.
 
     Args:
         criteria (Criteria): Evaluation criteria.
@@ -392,38 +432,31 @@ def evaluate_scenario(
         execute_prompt (Callable[[str], str]): The function to execute the evaluation prompt.
 
     Returns:
-        Tuple[EvaluationResult, EvaluationResult]: A tuple containing the
-        accuracy and completeness evaluation results.
+        tuple[EvaluationResult, ...]: A tuple containing the evaluation results.
     """
-    completeness_report = evaluate_output(
-        criteria.evaluation_steps.completeness,
-        output,
-        execute_prompt,
-    )
+    reports = []
+    for evaluation_steps_bucket in criteria.evaluation_steps_buckets():
+        logger.info('evaluate_output')
+        report = evaluate_output(
+            evaluation_steps_bucket.evaluation_steps,
+            output,
+            execute_prompt,
+        )
+        reports.append(EvaluationResult(evaluation_steps_bucket.name, report))
 
-    accuracy_report = evaluate_output(
-        criteria.evaluation_steps.accuracy, output, execute_prompt
-    )
-
-    return (accuracy_report, completeness_report)
+    return tuple(reports)
 
 
-def grade_scenario(
-    accuracy_report: str, completeness_report: str
-) -> Tuple[GradingResult, GradingResult]:
+def grade_scenario(evaluation_results: tuple[EvaluationResult, ...]) -> tuple[GradeResult, ...]:
     """
-    Grade accuracy and completeness reports.
+    Grade reports.
 
     Args:
-        accuracy_report (str): The accuracy report to be graded.
-        completeness_report (str): The completeness report to be graded.
+        evaluation_results tuple(EvaluationResult, ...): The evaluation results to be graded.
 
     Returns:
-        Tuple[GradingResult, GradingResult]: A tuple containing the
-        accuracy and completeness grading results.
+        tuple[GradeResult, ...]: A tuple containing the grading results.
     """
+    results = tuple(GradeResult.from_evaluation_result(result) for result in evaluation_results)
 
-    accuracy: GradingResult = grade_report(accuracy_report)
-    completeness: GradingResult = grade_report(completeness_report)
-
-    return (accuracy, completeness)
+    return results

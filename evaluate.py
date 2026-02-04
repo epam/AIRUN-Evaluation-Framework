@@ -18,7 +18,9 @@ from epam.auto_llm_eval import (
     Criteria,
 )
 
+
 logger = logging.getLogger(__name__)
+logging.basicConfig(encoding='utf-8', level=logging.INFO)
 
 
 def get_gpt4_model():
@@ -149,7 +151,7 @@ def is_valid_scenario(
         return False
 
     # Check required files present in the scenario directory
-    required_files = ["input.txt", "meta.yaml", "output.md"]
+    required_files = ["meta.yaml", "output.md"]
     for required_file in required_files:
         file_path = os.path.join(scenario_dir_full_path, required_file)
         if not os.path.isfile(file_path):
@@ -224,10 +226,10 @@ def main():
 
     eval_model = get_o3_mini_model()
 
-    grading_report = []
+    grading_reports = []
     for scenario_dir in os.listdir(data_dir):
-        scenario_id = int(scenario_dir)
         if is_valid_scenario(scenario_dir, data_dir, scenarios):
+            scenario_id = int(scenario_dir)
             criteria_yaml = read_file(
                 Path(data_dir) / scenario_dir / "meta.yaml"
             )
@@ -249,37 +251,28 @@ def main():
 
                 return extract_json_from_md(report)
 
-            (accuracy_report, completeness_report) = evaluate_scenario(
+            evaluation_results = evaluate_scenario(
                 criteria=criteria,
                 output=output,
                 execute_prompt=execute_prompt,
             )
 
-            write_file(
-                os.path.join(data_dir, scenario_dir, "accuracy.md"),
-                accuracy_report,
-            )
-            write_file(
-                os.path.join(data_dir, scenario_dir, "completeness.md"),
-                completeness_report,
-            )
+            for result in evaluation_results:
+                file_name = f"{result.name}.json"
+                write_file(
+                    os.path.join(data_dir, scenario_dir, file_name),
+                    result.report,
+                )
 
-            (accuracy_grade, completeness_grade) = grade_scenario(
-                accuracy_report=accuracy_report,
-                completeness_report=completeness_report,
-            )
+            grading_results = grade_scenario(evaluation_results)
 
-            grading_report.append(
-                {
-                    "scenario_id": scenario_id,
-                    "accuracy_score": accuracy_grade.get_score(),
-                    "completeness_score": completeness_grade.get_score(),
-                }
-            )
+            grading_report = {"scenario_id": scenario_id}
+            grading_report.update({f"{result.name}_score": result.get_score() for result in grading_results})
+            grading_reports.append(grading_report)
 
             scenarios.remove(scenario_id)
 
-    save_grading_report(report_path, grading_report)
+    save_grading_report(report_path, grading_reports)
 
     if len(scenarios) > 0:
         logger.warning("Missed scenario(s): %s", scenarios)
